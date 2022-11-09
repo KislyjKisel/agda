@@ -307,7 +307,7 @@ revisitRecordPatternTranslation qs = do
     case theDef def of
       Record{ recEtaEquality' = Inferred YesEta } -> return $ Just $ Left q
       Function
-        { funProjection = Nothing
+        { funProjection = Left MaybeProjection
             -- Andreas, 2017-08-10, issue #2664:
             -- Do not record pattern translate record projection definitions!
         , funCompiled   = Just cc
@@ -383,6 +383,10 @@ data HighlightModuleContents = DontHightlightModuleContents | DoHighlightModuleC
 --   mutual block we have. Hence the flag.
 highlight_ :: HighlightModuleContents -> A.Declaration -> TCM ()
 highlight_ hlmod d = do
+  reportSDoc "tc.decl" 45 $
+    text "Highlighting a declaration with the following spine:"
+      $$
+    text (show $ A.declarationSpine d)
   let highlight d = generateAndPrintSyntaxInfo d Full True
   Bench.billTo [Bench.Highlighting] $ case d of
     A.Axiom{}                -> highlight d
@@ -406,7 +410,8 @@ highlight_ hlmod d = do
       highlight (A.Section i x tel [])
       when (hlmod == DoHighlightModuleContents) $ mapM_ (highlight_ hlmod) (deepUnscopeDecls ds)
     A.RecSig{}               -> highlight d
-    A.RecDef i x uc dir ps tel cs -> highlight (A.RecDef i x uc dir A.noDataDefParams dummy cs)
+    A.RecDef i x uc dir ps tel cs ->
+      highlight (A.RecDef i x uc dir ps dummy cs)
       -- The telescope has already been highlighted.
       where
       -- Andreas, 2016-01-22, issue 1790
@@ -744,6 +749,12 @@ checkPragma r p =
             Function{} -> markStatic x
             _          -> typeError $ GenericError "STATIC directive only works on functions"
         A.InjectivePragma x -> markInjective x
+        A.NotProjectionLikePragma qn -> do
+          def <- getConstInfo qn
+          case theDef def of
+            it@Function{} ->
+              modifyGlobalDefinition qn $ \def -> def { theDef = it { funProjection = Left NeverProjection } }
+            _ -> typeError $ GenericError "NOT_PROJECTION_LIKE directive only applies to functions"
         A.InlinePragma b x -> do
           def <- getConstInfo x
           case theDef def of

@@ -65,15 +65,16 @@ import Agda.Utils.Impossible
 --   'Arg' is used for actual arguments ('Var', 'Con', 'Def' etc.)
 --   and in 'Abstract' syntax and other situations.
 --
---   [ cubical ] When @domFinite = True@ for the domain of a 'Pi'
---   type, the elements should be compared by tabulating the domain type.
---   Only supported in case the domain type is primIsOne, to obtain
---   the correct equality for partial elements.
+--   [ cubical ] When @annFinite (argInfoAnnotation domInfo) = True@ for
+--   the domain of a 'Pi' type, the elements should be compared by
+--   tabulating the domain type.  Only supported in case the domain type
+--   is primIsOne, to obtain the correct equality for partial elements.
 --
 data Dom' t e = Dom
   { domInfo   :: ArgInfo
-  , domFinite :: !Bool
   , domName   :: Maybe NamedName  -- ^ e.g. @x@ in @{x = y : A} -> B@.
+  , domIsFinite :: Bool
+    -- ^ Is this a Π-type (False), or a partial type (True)?
   , domTactic :: Maybe t        -- ^ "@tactic e".
   , unDom     :: e
   } deriving (Show, Functor, Foldable, Traversable)
@@ -81,18 +82,18 @@ data Dom' t e = Dom
 type Dom = Dom' Term
 
 instance Decoration (Dom' t) where
-  traverseF f (Dom ai b x t a) = Dom ai b x t <$> f a
+  traverseF f (Dom ai x t b a) = Dom ai x t b <$> f a
 
 instance HasRange a => HasRange (Dom' t a) where
   getRange = getRange . unDom
 
 instance (KillRange t, KillRange a) => KillRange (Dom' t a) where
-  killRange (Dom info b x t a) = killRange5 Dom info b x t a
+  killRange (Dom info x t b a) = killRange4 Dom info x t b a
 
 -- | Ignores 'Origin' and 'FreeVariables' and tactic.
 instance Eq a => Eq (Dom' t a) where
-  Dom (ArgInfo h1 m1 _ _ a1) b1 s1 _ x1 == Dom (ArgInfo h2 m2 _ _ a2) b2 s2 _ x2 =
-    (h1, m1, a1, b1, s1, x1) == (h2, m2, a2, b2, s2, x2)
+  Dom (ArgInfo h1 m1 _ _ a1) s1 f1 _ x1 == Dom (ArgInfo h2 m2 _ _ a2) s2 f2 _ x2 =
+    (h1, m1, a1, s1, f1, x1) == (h2, m2, a2, s2, f2, x2)
 
 instance LensNamed (Dom' t e) where
   type NameOf (Dom' t e) = NamedName
@@ -129,10 +130,10 @@ namedArgFromDom Dom{domInfo = i, domName = s, unDom = a} = Arg i $ Named s a
 -- often for class AddContext.
 
 domFromArg :: Arg a -> Dom a
-domFromArg (Arg i a) = Dom i False Nothing Nothing a
+domFromArg (Arg i a) = Dom i Nothing False Nothing a
 
 domFromNamedArg :: NamedArg a -> Dom a
-domFromNamedArg (Arg i a) = Dom i False (nameOf a) Nothing (namedThing a)
+domFromNamedArg (Arg i a) = Dom i (nameOf a) False Nothing (namedThing a)
 
 defaultDom :: a -> Dom a
 defaultDom = defaultArgDom defaultArgInfo
@@ -1370,9 +1371,8 @@ instance Pretty Sort where
       LockUniv -> "LockUniv"
       IntervalUniv -> "IntervalUniv"
       PiSort a s1 s2 -> mparens (p > 9) $
-        "piSort" <+> pDom (domInfo a) (text (absName s2) <+> ":" <+> pretty (unDom a))
-                      <+> parens (sep [ text ("λ " ++ absName s2 ++ " ->")
-                                      , nest 2 $ pretty (unAbs s2) ])
+        "piSort" <+> pDom (domInfo a) (text (absName s2) <+> ":" <+> pretty (unDom a) <+> ":" <+> pretty s1)
+                      <+> parens (pretty (unAbs s2))
       FunSort a b -> mparens (p > 9) $
         "funSort" <+> prettyPrec 10 a <+> prettyPrec 10 b
       UnivSort s -> mparens (p > 9) $ "univSort" <+> prettyPrec 10 s
@@ -1410,6 +1410,10 @@ instance Pretty a => Pretty (Pattern' a) where
   prettyPrec _ (ProjP _o q)  = text ("." ++ prettyShow q)
   prettyPrec n (IApplyP _o _ _ x) = prettyPrec n x
 --  prettyPrec n (IApplyP _o u0 u1 x) = text "@[" <> prettyPrec 0 u0 <> text ", " <> prettyPrec 0 u1 <> text "]" <> prettyPrec n x
+
+instance Pretty a => Pretty (Blocked a) where
+  pretty (Blocked x a) = ("[" <+> pretty a <+> "]") <> pretty x
+  pretty (NotBlocked _ x) = pretty x
 
 -----------------------------------------------------------------------------
 -- * NFData instances
@@ -1457,7 +1461,7 @@ instance NFData PlusLevel where
   rnf (Plus n l) = rnf (n, l)
 
 instance NFData e => NFData (Dom e) where
-  rnf (Dom a b c d e) = rnf a `seq` rnf b `seq` rnf c `seq` rnf d `seq` rnf e
+  rnf (Dom a c d e f) = rnf a `seq` rnf c `seq` rnf d `seq` rnf e `seq` rnf f
 
 instance NFData DataOrRecord
 instance NFData ConHead

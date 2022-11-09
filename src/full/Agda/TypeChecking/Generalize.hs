@@ -818,12 +818,13 @@ createGenRecordType genRecMeta@(El genRecSort _) sortedMetas = do
                , funMutual       = Just []
                , funAbstr        = ConcreteDef
                , funDelayed      = NotDelayed
-               , funProjection   = Just proj
+               , funProjection   = Right proj
                , funFlags        = Set.empty
                , funTerminates   = Just True
                , funExtLam       = Nothing
                , funWith         = Nothing
                , funCovering     = []
+               , funIsKanOp      = Nothing
                }
   addConstant' (conName genRecCon) defaultArgInfo (conName genRecCon) __DUMMY_TYPE__ $ -- Filled in later
     Constructor { conPars   = 0

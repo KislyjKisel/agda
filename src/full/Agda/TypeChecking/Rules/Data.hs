@@ -186,7 +186,7 @@ checkDataDef i name uc (A.DataDefParams gpars ps) cs =
         let cons   = map A.axiomName cs  -- get constructor names
 
         (mtranspix, transpFun) <-
-          ifM (collapseDefault . optWithoutK <$> pragmaOptions)
+          ifM (collapseDefault . optCubicalCompatible <$> pragmaOptions)
             (do mtranspix <- inTopContext $ defineTranspIx name
                 transpFun <- inTopContext $
                                defineTranspFun name mtranspix cons
@@ -218,8 +218,6 @@ checkDataSort name s = setCurrentRange name $ do
                    , prettyTCM name
                    , "does not admit data or record declarations"
                    ]
-      dunno :: TCM ()
-      dunno = postpone (unblockOnAnyMetaIn s) s
     case s of
       -- Sorts that admit data definitions.
       Type _       -> yes
@@ -231,10 +229,10 @@ checkDataSort name s = setCurrentRange name $ do
       SizeUniv     -> no
       LockUniv     -> no
       IntervalUniv -> no
-      -- Unsolved sorts.
-      PiSort _ _ _ -> dunno
-      FunSort _ _  -> dunno
-      UnivSort _   -> dunno
+      -- Blocked sorts.
+      PiSort _ _ _ -> __IMPOSSIBLE__
+      FunSort _ _  -> __IMPOSSIBLE__
+      UnivSort _   -> __IMPOSSIBLE__
       MetaS _ _    -> __IMPOSSIBLE__
       DummyS _     -> __IMPOSSIBLE__
   where
@@ -675,7 +673,7 @@ defineProjections dataName con params names fsT t = do
                 { _funClauses    = cs
                 , _funCompiled   = Just cc
                 , _funSplitTree  = mst
-                , _funProjection = Just $ Projection
+                , _funProjection = Right Projection
                     { projProper   = Nothing
                     , projOrig     = projName
                     , projFromType = Arg (getArgInfo ty) dataName
@@ -790,9 +788,10 @@ defineTranspIx d = do
                   { _funClauses    = cs
                --   , _funCompiled   = Just cc
                --   , _funSplitTree  = mst
-                  , _funProjection = Nothing
+                  , _funProjection = Left MaybeProjection
                   , _funMutual     = Just []
                   , _funTerminates = Just True
+                  , _funIsKanOp    = Just d
                   }
         inTopContext $ do
          reportSDoc "tc.transpx.type" 15 $ vcat
@@ -900,9 +899,10 @@ defineTranspFun d mtrX cons pathCons = do
                   { _funClauses    = cs
                   , _funCompiled   = Just cc
                   , _funSplitTree  = mst
-                  , _funProjection = Nothing
+                  , _funProjection = Left MaybeProjection
                   , _funMutual     = Just []
                   , _funTerminates = Just True
+                  , _funIsKanOp    = Just d
                   }
         inTopContext $ addConstant trD $
           (defaultDefn defaultArgInfo trD theType (Cubical CErased) $ FunctionDefn fun)
@@ -1365,7 +1365,7 @@ defineTranspForFields pathCons applyProj name params fsT fns rect = do
   lang <- getLanguage
   noMutualBlock $ addConstant theName $
     (defaultDefn defaultArgInfo theName theType lang
-       (FunctionDefn $ emptyFunctionData { _funTerminates = Just True }))
+       (FunctionDefn $ emptyFunctionData { _funTerminates = Just True, _funIsKanOp = Just name }))
       { defNoCompilation = True }
   -- ⊢ Γ = gamma = (δ : Δ^I) (φ : I) (u0 : R (δ i0))
   -- Γ ⊢     rtype = R (δ i1)
@@ -1523,7 +1523,7 @@ defineHCompForFields applyProj name params fsT fns rect = do
   lang <- getLanguage
   noMutualBlock $ addConstant theName $
     (defaultDefn defaultArgInfo theName theType lang
-       (FunctionDefn $ emptyFunctionData { _funTerminates = Just True }))
+       (FunctionDefn $ emptyFunctionData { _funTerminates = Just True, _funIsKanOp = Just name }))
       { defNoCompilation = True }
   --   ⊢ Γ = gamma = (δ : Δ) (φ : I) (_ : (i : I) -> Partial φ (R δ)) (_ : R δ)
   -- Γ ⊢     rtype = R δ
@@ -1734,7 +1734,7 @@ fitsIn uc forceds t s = do
   withoutK <- withoutKOption
   when withoutK $ do
     q <- viewTC eQuantity
-    usableAtModality' (Just s) (setQuantity q defaultModality) (unEl t)
+    usableAtModality' (Just s) ConstructorType (setQuantity q defaultModality) (unEl t)
 
   fitsIn' withoutK forceds t s
   where
