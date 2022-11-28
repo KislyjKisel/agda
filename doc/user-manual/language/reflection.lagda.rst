@@ -423,9 +423,10 @@ following primitive operations::
     -- Extend the current context with a variable of the given type and its name.
     extendContext : ∀ {a} {A : Set a} → String → Arg Type → TC A → TC A
 
-    -- Set the current context. Takes a context telescope entries in
-    -- reverse order, as given by `getContext`. Each type should be valid
-    -- in the context formed by the remaining elements in the list.
+    -- Set the current context relative to the context the TC computation
+    -- is invoked from.  Takes a context telescope entries in reverse
+    -- order, as given by `getContext`. Each type should be valid in the
+    -- context formed by the remaining elements in the list.
     inContext : ∀ {a} {A : Set a} → Telescope → TC A → TC A
 
     -- Quote a value, returning the corresponding Term.
@@ -464,10 +465,12 @@ following primitive operations::
     -- 'declareDef' or with an explicit type signature in the program.
     defineFun : Name → List Clause → TC ⊤
 
-    -- Get the type of a defined name. Replaces 'primNameType'.
+    -- Get the type of a defined name relative to the current
+    -- module. Replaces 'primNameType'.
     getType : Name → TC Type
 
-    -- Get the definition of a defined name. Replaces 'primNameDefinition'.
+    -- Get the definition of a defined name relative to the current
+    -- module. Replaces 'primNameDefinition'.
     getDefinition : Name → TC Definition
 
     -- Check if a name refers to a macro

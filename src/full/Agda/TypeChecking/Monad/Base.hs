@@ -3927,6 +3927,7 @@ data Warning
   | SafeFlagNoCoverageCheck
   | SafeFlagInjective
   | SafeFlagEta                            -- ^ ETA pragma is unsafe.
+  | OptionWarning            OptionWarning
   | ParseWarning             ParseWarning
   | LibraryWarning           LibWarning
   | DeprecationWarning String String String
@@ -3989,6 +3990,7 @@ warningName :: Warning -> WarningName
 warningName = \case
   -- special cases
   NicifierIssue dw             -> declarationWarningName dw
+  OptionWarning ow             -> optionWarningName ow
   ParseWarning pw              -> parseWarningName pw
   LibraryWarning lw            -> libraryWarningName lw
   AsPatternShadowsConstructorOrPatternSynonym{} -> AsPatternShadowsConstructorOrPatternSynonym_
@@ -4549,7 +4551,7 @@ instance Monad ReduceM where
   return = pure
   (>>=) = bindReduce
   (>>) = (*>)
-#if __GLASGOW_HASKELL__ < 808
+#if __GLASGOW_HASKELL__ < 806
   fail = Fail.fail
 #endif
 
@@ -4862,7 +4864,7 @@ instance MonadTrans TCMT where
     lift m = TCM $ \_ _ -> m
 
 -- We want a special monad implementation of fail.
-#if __GLASGOW_HASKELL__ < 808
+#if __GLASGOW_HASKELL__ < 806
 instance MonadIO m => Monad (TCMT m) where
 #else
 -- Andreas, 2022-02-02, issue #5659:
@@ -4873,7 +4875,7 @@ instance Monad m => Monad (TCMT m) where
     return = pure
     (>>=)  = bindTCMT
     (>>)   = (*>)
-#if __GLASGOW_HASKELL__ < 808
+#if __GLASGOW_HASKELL__ < 806
     fail   = Fail.fail
 #endif
 
@@ -4891,7 +4893,7 @@ instance MonadIO m => MonadIO (TCMT m) where
         E.throwIO $ IOException s r err
 
 instance ( MonadFix m
-#if __GLASGOW_HASKELL__ < 808
+#if __GLASGOW_HASKELL__ < 806
          , MonadIO m
 #endif
          ) => MonadFix (TCMT m) where

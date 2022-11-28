@@ -5,6 +5,7 @@ module Agda.Interaction.Options.Base
     ( CommandLineOptions(..)
     , PragmaOptions(..)
     , OptionsPragma
+    , OptionWarning(..), optionWarningName
     , Flag, OptM, runOptM, OptDescr(..), ArgDescr(..)
     , Verbosity, VerboseKey, VerboseLevel
     , WarningMode(..)
@@ -34,9 +35,12 @@ module Agda.Interaction.Options.Base
     , getOptSimple
     ) where
 
+import Prelude hiding ( null )
+
 import Control.DeepSeq
 import Control.Monad ( when, void )
-import Control.Monad.Except ( Except, MonadError(throwError), runExcept )
+import Control.Monad.Except ( ExceptT, MonadError(throwError), runExceptT )
+import Control.Monad.Writer ( Writer, runWriter, MonadWriter(..) )
 
 import qualified System.IO.Unsafe as UNSAFE (unsafePerformIO)
 import Data.Maybe
@@ -74,12 +78,15 @@ import Agda.Utils.List          ( groupOn, initLast1 )
 import Agda.Utils.List1         ( String1, toList )
 import qualified Agda.Utils.List1        as List1
 import qualified Agda.Utils.Maybe.Strict as Strict
-import Agda.Utils.Null (empty)
+import Agda.Utils.Monad         ( tell1 )
+import Agda.Utils.Null
 import Agda.Utils.Pretty
 import Agda.Utils.ProfileOptions
 import Agda.Utils.Trie          ( Trie )
 import qualified Agda.Utils.Trie as Trie
 import Agda.Utils.WithDefault
+
+import Agda.Utils.Impossible
 
 import Agda.Version
 
@@ -354,10 +361,16 @@ defaultPragmaOptions = PragmaOptions
   , optKeepCoveringClauses       = False
   }
 
-type OptM = Except String
+-- | The options parse monad 'OptM' collects warnings that are not discarded
+--   when a fatal error occurrs
+newtype OptM a = OptM { unOptM :: ExceptT OptionError (Writer OptionWarnings) a }
+  deriving (Functor, Applicative, Monad, MonadError OptionError, MonadWriter OptionWarnings)
 
-runOptM :: Monad m => OptM opts -> m (Either String opts)
-runOptM = pure . runExcept
+type OptionError = String
+type OptionWarnings = [OptionWarning]
+
+runOptM :: OptM opts -> (Either OptionError opts, OptionWarnings)
+runOptM = runWriter . runExceptT . unOptM
 
 {- | @f :: Flag opts@  is an action on the option record that results from
      parsing an option.  @f opts@ produces either an error message or an
@@ -365,9 +378,28 @@ runOptM = pure . runExcept
 -}
 type Flag opts = opts -> OptM opts
 
+-- | Warnings when parsing options.
+
+data OptionWarning
+  = OptionRenamed { oldOptionName :: String, newOptionName :: String }
+  deriving (Show, Generic)
+
+instance NFData OptionWarning
+
+instance Pretty OptionWarning where
+  pretty = \case
+    OptionRenamed old new -> hsep
+      [ "Option", name old, "is deprecated, please use", name new, "instead" ]
+    where
+    name = text . ("--" ++)
+
+optionWarningName :: OptionWarning -> WarningName
+optionWarningName = \case
+  OptionRenamed{} -> OptionRenamed_
+
 -- | Checks that the given options are consistent.
 
-checkOpts :: Flag CommandLineOptions
+checkOpts :: MonadError OptionError m => CommandLineOptions -> m ()
 checkOpts opts = do
   -- NOTE: This is a temporary hold-out until --vim can be converted into a backend or plugin,
   -- whose options compatibility currently is checked in `Agda.Compiler.Backend`.
@@ -383,12 +415,11 @@ checkOpts opts = do
   --     to the rest of the type-checking system.
   when (optGenerateVimFile opts && optOnlyScopeChecking opts) $
     throwError $ "The --only-scope-checking flag cannot be combined with --vim."
-  return opts
 
 -- | Check for unsafe pragmas. Gives a list of used unsafe flags.
 
-unsafePragmaOptions :: CommandLineOptions -> PragmaOptions -> [String]
-unsafePragmaOptions clo opts =
+unsafePragmaOptions :: PragmaOptions -> [String]
+unsafePragmaOptions opts =
   [ "--allow-unsolved-metas"                     | optAllowUnsolved opts             ] ++
   [ "--allow-incomplete-matches"                 | optAllowIncompleteMatch opts      ] ++
   [ "--no-positivity-check"                      | optDisablePositivity opts         ] ++
@@ -1120,8 +1151,7 @@ pragmaOptions =
                     "enable cubical features (some only in erased settings), implies --cubical-compatible"
     , Option []     ["guarded"] (NoArg guardedFlag)
                     "enable @lock/@tick attributes"
-    , Option []     ["lossy-unification"] (NoArg firstOrderFlag)
-                    "enable heuristically unifying `f es = f es'` by unifying `es = es'`, even when it could lose solutions."
+    , lossyUnificationOption
     , Option []     ["postfix-projections"] (NoArg postfixProjectionsFlag)
                     "make postfix projection notation the default"
     , Option []     ["keep-pattern-variables"] (NoArg keepPatternVariablesFlag)
@@ -1190,10 +1220,16 @@ pragmaOptions =
                     "do not discard covering clauses (required for some external backends)"
     ]
 
+lossyUnificationOption :: OptDescr (Flag PragmaOptions)
+lossyUnificationOption =
+      Option []     ["lossy-unification"] (NoArg firstOrderFlag)
+                    "enable heuristically unifying `f es = f es'` by unifying `es = es'`, even when it could lose solutions"
+
 -- | Pragma options of previous versions of Agda.
 --   Should not be listed in the usage info, put parsed by GetOpt for good error messaging.
 deadPragmaOptions :: [OptDescr (Flag PragmaOptions)]
-deadPragmaOptions = map (uncurry removedOption) $
+deadPragmaOptions = concat
+  [ map (uncurry removedOption)
     [ ("guardedness-preserving-type-constructors"
       , "")
     , ("no-coverage-check"
@@ -1206,6 +1242,12 @@ deadPragmaOptions = map (uncurry removedOption) $
       , inVersion "2.6.3") -- see issue #5427
     , ("no-flat-split", inVersion "2.6.3")  -- See issue #6263.
     ]
+  , map (uncurry renamedNoArgOption)
+    [ ( "experimental-lossy-unification"
+      , lossyUnificationOption
+      )
+    ]
+  ]
   where
     inVersion = ("in version " ++)
 
@@ -1219,6 +1261,21 @@ removedOption ::
 removedOption name remark = Option [] [name] (NoArg $ const $ throwError msg) msg
   where
   msg = unwords ["Option", "--" ++ name, "has been removed", remark]
+
+-- | Generate a deprecated option that resolves to another option.
+renamedNoArgOption ::
+     String
+       -- ^ The deprecated long option name.
+  -> OptDescr (Flag a)
+       -- ^ The new option.
+  -> OptDescr (Flag a)
+       -- ^ The old option which additionally emits a 'RenamedOption' warning.
+renamedNoArgOption old = \case
+  Option _ [new] (NoArg flag) description ->
+    Option [] [old] (NoArg flag') $ concat [description, " (DEPRECATED, use --", new, ")"]
+    where
+    flag' o = tell1 (OptionRenamed old new) >> flag o
+  _ -> __IMPOSSIBLE__
 
 -- | Used for printing usage info.
 --   Does not include the dead options.
@@ -1273,17 +1330,6 @@ getOptSimple argv opts fileArg = \ defaults ->
       sugs [a] = a
       sugs as  = "any of " ++ unwords as
 
-{- No longer used in favour of parseBackendOptions in Agda.Compiler.Backend
--- | Parse the standard options.
-parseStandardOptions :: [String] -> OptM CommandLineOptions
-parseStandardOptions argv = parseStandardOptions' argv defaultOptions
-
-parseStandardOptions' :: [String] -> Flag CommandLineOptions
-parseStandardOptions' argv opts = do
-  opts <- getOptSimple (stripRTS argv) (deadStandardOptions ++ standardOptions) inputFlag opts
-  checkOpts opts
--}
-
 -- | Parse options from an options pragma.
 parsePragmaOptions
   :: [String]
@@ -1295,7 +1341,7 @@ parsePragmaOptions argv opts = do
   ps <- getOptSimple argv (deadPragmaOptions ++ pragmaOptions)
           (\s _ -> throwError $ "Bad option in pragma: " ++ s)
           (optPragmaOptions opts)
-  _ <- checkOpts (opts { optPragmaOptions = ps })
+  () <- checkOpts (opts { optPragmaOptions = ps })
   return ps
 
 -- | Parse options for a plugin.
