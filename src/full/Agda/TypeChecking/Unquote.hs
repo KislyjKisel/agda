@@ -1046,31 +1046,13 @@ evalTCM v = do
 
     tcPragmaForeign :: Text -> Text -> TCM Term
     tcPragmaForeign backend code = do
-      modifyTC $ \ st -> let preScSt = stPreScopeState st in st
-        { stPreScopeState = preScSt
-          { stPreForeignCode = Map.insertWith
-            (flip (++))
-            (T.unpack backend)
-            [ForeignCode noRange $ T.unpack code]
-            (stPreForeignCode preScSt)
-          }
-        }
+      addForeignCode (T.unpack backend) (T.unpack code)
       primUnitUnit
 
     tcPragmaCompile :: Text -> QName -> Text -> TCM Term
     tcPragmaCompile backend name code = do
-      modifyTC $ \ st -> let postScSt = stPostScopeState st in st
-        { stPostScopeState = postScSt
-          { stPostSignature = (stPostSignature postScSt)
-            { _sigDefinitions = HashMap.adjust
-              (\ d -> d
-                { defCompiledRep = Map.insertWith (++) (T.unpack backend) [CompilerPragma noRange (T.unpack code)] $ defCompiledRep d
-                })
-              name
-              (_sigDefinitions $ stPostSignature postScSt)
-            }
-          }
-        }
+      modifySignature $ updateDefinition name $
+        addCompilerPragma (T.unpack backend) $ CompilerPragma noRange (T.unpack code)
       primUnitUnit
 
     tcRunSpeculative :: Term -> UnquoteM Term
